@@ -179,6 +179,140 @@ export default function App() {
   // Month State
   const [currentMonthIndex, setCurrentMonthIndex] = useState(4); // พฤษภาคม (Index 4)
   const [currentYear, setCurrentYear] = useState(2024);
+  const [isTimelineCalendarOpen, setIsTimelineCalendarOpen] = useState(false);
+  const [calendarSubTab, setCalendarSubTab] = useState<'quick' | 'full'>('full');
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState<number | null>(null);
+  const [notificationFilter, setNotificationFilter] = useState<'all' | 'on-track' | 'at-risk' | 'delayed' | 'general'>('all');
+
+  // Helper to get years present in data
+  const getTimelineSelectOptions = () => {
+    const yearsSet = new Set<number>([2023, 2024, 2025, 2026]);
+    
+    projects.forEach(p => {
+      const start = p.startDate || getFallbackDateFromWeek(p.startWeek, 'start');
+      const end = p.endDate || getFallbackDateFromWeek(p.endWeek, 'end');
+      const sy = new Date(start).getFullYear();
+      const ey = new Date(end).getFullYear();
+      if (!isNaN(sy)) yearsSet.add(sy);
+      if (!isNaN(ey)) yearsSet.add(ey);
+    });
+
+    tasks.forEach(t => {
+      if (t.startDate) {
+        const sy = new Date(t.startDate).getFullYear();
+        if (!isNaN(sy)) yearsSet.add(sy);
+      }
+      if (t.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)) {
+        const dy = new Date(t.dueDate).getFullYear();
+        if (!isNaN(dy)) yearsSet.add(dy);
+      }
+    });
+
+    milestones.forEach(m => {
+      if (m.date && /^\d{4}-\d{2}-\d{2}$/.test(m.date)) {
+        const my = new Date(m.date).getFullYear();
+        if (!isNaN(my)) yearsSet.add(my);
+      }
+    });
+
+    const years = Array.from(yearsSet).sort((a, b) => a - b);
+    return { years };
+  };
+
+  // Helper to count tasks/projects active in a given year
+  const getActivityCountForYear = (y: number) => {
+    let count = 0;
+    
+    projects.forEach(p => {
+      const startStr = p.startDate || getFallbackDateFromWeek(p.startWeek, 'start');
+      const endStr = p.endDate || getFallbackDateFromWeek(p.endWeek, 'end');
+      const startYear = new Date(startStr).getFullYear();
+      const endYear = new Date(endStr).getFullYear();
+      if (y >= startYear && y <= endYear) {
+        count++;
+      }
+    });
+
+    tasks.forEach(t => {
+      if (t.startDate) {
+        const sy = new Date(t.startDate).getFullYear();
+        const dy = /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate) ? new Date(t.dueDate).getFullYear() : 2024;
+        if (y >= sy && y <= dy) {
+          count++;
+        }
+      } else if (t.dueDate) {
+        const dy = /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate) ? new Date(t.dueDate).getFullYear() : 2024;
+        if (y === dy) {
+          count++;
+        }
+      }
+    });
+
+    return count;
+  };
+
+  // Helper to count tasks/projects active in a given month of a given year
+  const getActivityCountForMonth = (y: number, m: number) => {
+    let count = 0;
+    const targetStart = new Date(y, m, 1);
+    const targetEnd = new Date(y, m + 1, 0, 23, 59, 59);
+
+    projects.forEach(p => {
+      const startStr = p.startDate || getFallbackDateFromWeek(p.startWeek, 'start');
+      const endStr = p.endDate || getFallbackDateFromWeek(p.endWeek, 'end');
+      const pStart = new Date(startStr);
+      const pEnd = new Date(endStr);
+      if (!(pEnd < targetStart || pStart > targetEnd)) {
+        count++;
+      }
+    });
+
+    tasks.forEach(t => {
+      const startStr = t.startDate || (t.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate) ? t.dueDate : '2024-05-01');
+      const endStr = t.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate) ? t.dueDate : '2024-05-31';
+      const tStart = new Date(startStr);
+      const tEnd = new Date(endStr);
+      if (!(tEnd < targetStart || tStart > targetEnd)) {
+        count++;
+      }
+    });
+
+    return count;
+  };
+
+  // Helper to get days in a month for calendar grid
+  const getDaysInMonth = (year: number, month: number) => {
+    const date = new Date(year, month, 1);
+    const days: (number | null)[] = [];
+    const startDayOfWeek = date.getDay(); // 0 = Sun, 1 = Mon, etc.
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    
+    for (let i = 0; i < startDayOfWeek; i++) {
+      days.push(null);
+    }
+    
+    for (let d = 1; d <= totalDays; d++) {
+      days.push(d);
+    }
+    
+    return days;
+  };
+
+  // Helper to retrieve activities for a specific day
+  const getDayActivities = (year: number, month: number, day: number) => {
+    const formattedDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    
+    const dayTasks = tasks.filter(t => t.dueDate === formattedDate || t.startDate === formattedDate);
+    const dayProjects = projects.filter(p => p.startDate === formattedDate || p.endDate === formattedDate);
+    const dayMilestones = milestones.filter(m => m.date === formattedDate);
+    
+    return {
+      tasks: dayTasks,
+      projects: dayProjects,
+      milestones: dayMilestones,
+      totalCount: dayTasks.length + dayProjects.length + dayMilestones.length
+    };
+  };
 
   // Helper to calculate dynamic calendar header columns (7 columns)
   const getTimelineHeaders = () => {
@@ -218,7 +352,7 @@ export default function App() {
         const m = (currentMonthIndex + i) % 12;
         const y = currentYear + Math.floor((currentMonthIndex + i) / 12);
         
-        const label = `${THAI_MONTHS_SHORT[m]} ${y + 543}`;
+        const label = `${THAI_MONTHS_SHORT[m]} ${y}`;
         const isCurrent = todayYear === y && todayMonth === m;
         
         headers.push({
@@ -245,19 +379,19 @@ export default function App() {
         
         headers.push({
           label,
-          subLabel: `ปี พ.ศ. ${y + 543}`,
+          subLabel: `ปี ค.ศ. ${y}`,
           isCurrent
         });
       }
     } else { // yearly
       for (let i = 0; i < 7; i++) {
         const y = currentYear + i;
-        const label = `ปี พ.ศ. ${y + 543}`;
+        const label = `ปี ค.ศ. ${y}`;
         const isCurrent = todayYear === y;
         
         headers.push({
           label,
-          subLabel: `ค.ศ. ${y}`,
+          subLabel: `พ.ศ. ${y + 543}`,
           isCurrent
         });
       }
@@ -1102,8 +1236,8 @@ export default function App() {
           <div>
             <h1 className="text-xl md:text-2xl font-bold tracking-tight text-[#000000] flex items-center gap-2">
               <span>{getTabTitle()}</span>
-              <span className="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded-md hidden lg:inline-block">
-                พฤษภาคม 2024
+              <span className="text-xs font-extrabold text-indigo-600 bg-indigo-50/70 border border-indigo-100/40 px-2.5 py-1 rounded-lg hidden lg:inline-block">
+                {THAI_MONTHS[currentMonthIndex]} {currentYear}
               </span>
             </h1>
           </div>
@@ -1263,18 +1397,6 @@ export default function App() {
                   {/* Right Action buttons */}
                   <div className="flex items-center gap-2">
                     <button 
-                      onClick={() => {
-                        setSelectedTeamTab('all');
-                        setSearchQuery('');
-                        addNotification('ล้างตัวกรองทั้งหมด');
-                      }}
-                      className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-xs font-semibold rounded-xl text-gray-600 bg-white hover:bg-gray-50 cursor-pointer"
-                    >
-                      <Filter className="w-3.5 h-3.5" />
-                      <span>ตัวกรอง</span>
-                    </button>
-
-                    <button 
                       onClick={handleOpenNewProject}
                       className="flex items-center gap-1.5 px-4 py-2 bg-black text-white hover:bg-gray-800 text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer"
                     >
@@ -1293,16 +1415,285 @@ export default function App() {
                     {/* Month selector & Team tabs */}
                     <div className="p-5 border-b border-gray-200 flex flex-wrap items-center justify-between gap-4 bg-gray-50/50">
                       
-                      {/* Month Switcher */}
-                      <div className="flex items-center gap-3">
-                        <Calendar className="w-4.5 h-4.5 text-[#000000]" />
-                        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-                          {timeView === 'weekly' && `แผนงานรายสัปดาห์ประจำเดือน ${THAI_MONTHS[currentMonthIndex]} ${currentYear + 543}`}
-                          {timeView === 'monthly' && `แผนงานรายเดือนตั้งแต่ ${THAI_MONTHS[currentMonthIndex]} ${currentYear + 543}`}
-                          {timeView === 'quarterly' && `แผนงานรายไตรมาสตั้งแต่ปี พ.ศ. ${currentYear + 543}`}
-                          {timeView === 'yearly' && `แผนงานรายปีตั้งแต่ปี พ.ศ. ${currentYear + 543}`}
-                        </h3>
-                        <div className="flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg p-0.5">
+                      {/* Month & Year Selectors with task counts */}
+                      <div className="flex flex-wrap items-center gap-3 bg-gray-100/50 p-2 rounded-2xl border border-gray-200">
+                        <div className="flex items-center gap-1.5 px-1">
+                          <Calendar className="w-4 h-4 text-black" />
+                          <span className="text-xs font-bold text-gray-700">ช่วงเวลา:</span>
+                        </div>
+
+                        {/* Interactive Calendar Dropdown Trigger */}
+                        <div className="relative inline-block">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsTimelineCalendarOpen(!isTimelineCalendarOpen);
+                              setSelectedCalendarDay(null);
+                            }}
+                            className="flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-800 text-xs font-extrabold rounded-xl px-2.5 py-1.5 border border-gray-200 shadow-2xs hover:border-gray-300 transition-all cursor-pointer"
+                          >
+                            <span className="text-indigo-600 bg-indigo-50/60 px-2 py-0.5 rounded-md border border-indigo-100/40 font-black">
+                              {THAI_MONTHS[currentMonthIndex]} ค.ศ. {currentYear}
+                            </span>
+                            <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-300 ${isTimelineCalendarOpen ? 'rotate-180' : ''}`} />
+                          </button>
+
+                          {/* Beautiful Floating Dropdown Popover */}
+                          <AnimatePresence>
+                            {isTimelineCalendarOpen && (
+                              <>
+                                {/* Backdrop to dismiss popover */}
+                                <div 
+                                  className="fixed inset-0 z-40" 
+                                  onClick={() => setIsTimelineCalendarOpen(false)}
+                                />
+                                
+                                <motion.div
+                                  initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                                  exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                                  transition={{ duration: 0.15 }}
+                                  className="absolute left-0 mt-2 w-[310px] sm:w-[350px] bg-white border border-gray-200 rounded-2xl shadow-xl z-50 overflow-hidden flex flex-col text-left"
+                                >
+                                  {/* Smart Selector Header inside the popover */}
+                                  <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/70 p-2 gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (currentMonthIndex === 0) {
+                                          setCurrentMonthIndex(11);
+                                          setCurrentYear(prev => prev - 1);
+                                        } else {
+                                          setCurrentMonthIndex(prev => prev - 1);
+                                        }
+                                        setSelectedCalendarDay(null);
+                                      }}
+                                      className="p-1.5 hover:bg-gray-200 rounded-lg text-gray-500 cursor-pointer transition-colors"
+                                      title="เดือนก่อนหน้า"
+                                    >
+                                      <ChevronLeft className="w-3.5 h-3.5" />
+                                    </button>
+
+                                    {/* Month Selector */}
+                                    <select
+                                      value={currentMonthIndex}
+                                      onChange={(e) => {
+                                        setCurrentMonthIndex(parseInt(e.target.value, 10));
+                                        setSelectedCalendarDay(null);
+                                        addNotification(`เปลี่ยนแผนเป็นเดือน ${THAI_MONTHS[parseInt(e.target.value, 10)]}`);
+                                      }}
+                                      className="bg-white border border-gray-200 text-[11px] font-black rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer text-gray-700 flex-1 shadow-2xs"
+                                    >
+                                      {THAI_MONTHS.map((mName, idx) => (
+                                        <option key={idx} value={idx}>
+                                          {mName}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    {/* Year Selector */}
+                                    <select
+                                      value={currentYear}
+                                      onChange={(e) => {
+                                        const y = parseInt(e.target.value, 10);
+                                        setCurrentYear(y);
+                                        setSelectedCalendarDay(null);
+                                        addNotification(`เปลี่ยนแผนเป็นปี ค.ศ. ${y}`);
+                                      }}
+                                      className="bg-white border border-gray-200 text-[11px] font-black rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer text-gray-700 w-24 shadow-2xs"
+                                    >
+                                      {getTimelineSelectOptions().years.map((y) => (
+                                        <option key={y} value={y}>
+                                          ค.ศ. {y}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (currentMonthIndex === 11) {
+                                          setCurrentMonthIndex(0);
+                                          setCurrentYear(prev => prev + 1);
+                                        } else {
+                                          setCurrentMonthIndex(prev => prev + 1);
+                                        }
+                                        setSelectedCalendarDay(null);
+                                      }}
+                                      className="p-1.5 hover:bg-gray-200 rounded-lg text-gray-500 cursor-pointer transition-colors"
+                                      title="เดือนถัดไป"
+                                    >
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+
+                                  <div className="p-3">
+                                    <div className="space-y-2.5">
+                                      {/* Days Header */}
+                                      <div className="grid grid-cols-7 gap-1 text-center border-b border-gray-100 pb-1">
+                                        {['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'].map((dName, idx) => (
+                                          <span 
+                                            key={idx} 
+                                            className={`text-[9px] font-bold ${idx === 0 ? 'text-red-500' : idx === 6 ? 'text-indigo-500' : 'text-gray-400'}`}
+                                          >
+                                            {dName}
+                                          </span>
+                                        ))}
+                                      </div>
+
+                                      {/* Days Cells */}
+                                      <div className="grid grid-cols-7 gap-1">
+                                        {getDaysInMonth(currentYear, currentMonthIndex).map((day, idx) => {
+                                          if (day === null) {
+                                            return <div key={`empty-${idx}`} />;
+                                          }
+                                          
+                                          const acts = getDayActivities(currentYear, currentMonthIndex, day);
+                                          const isSelected = selectedCalendarDay === day;
+                                          
+                                          const todayObj = new Date();
+                                          const isToday = todayObj.getDate() === day && 
+                                                          todayObj.getMonth() === currentMonthIndex && 
+                                                          todayObj.getFullYear() === currentYear;
+
+                                          return (
+                                            <button
+                                              type="button"
+                                              key={`day-${day}`}
+                                              onClick={() => setSelectedCalendarDay(day)}
+                                              className={`h-7 w-7 flex flex-col items-center justify-center rounded-lg text-[10px] font-extrabold relative transition-all cursor-pointer
+                                                ${isSelected 
+                                                  ? 'bg-indigo-600 text-white shadow-sm' 
+                                                  : isToday 
+                                                    ? 'bg-blue-50 text-blue-600 border border-blue-100' 
+                                                    : 'hover:bg-gray-100 text-gray-700'
+                                                }`}
+                                            >
+                                              <span>{day}</span>
+                                              {acts.totalCount > 0 && !isSelected && (
+                                                <div className="absolute bottom-0.5 flex justify-center gap-0.5">
+                                                  {acts.tasks.length > 0 && <span className="w-0.5 h-0.5 rounded-full bg-emerald-500" />}
+                                                  {acts.projects.length > 0 && <span className="w-0.5 h-0.5 rounded-full bg-blue-500" />}
+                                                  {acts.milestones.length > 0 && <span className="w-0.5 h-0.5 rounded-full bg-amber-500" />}
+                                                </div>
+                                              )}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+
+                                      {/* Calendar Day Detail summary inside the popover */}
+                                      {selectedCalendarDay !== null && (
+                                        <div className="p-2 bg-gray-50 rounded-xl border border-gray-100 text-[10px]">
+                                          <div className="flex justify-between items-center mb-1">
+                                            <span className="font-bold text-gray-500">
+                                              งานวันที่ {selectedCalendarDay} {THAI_MONTHS_SHORT[currentMonthIndex]} ค.ศ. {currentYear}:
+                                            </span>
+                                            <button 
+                                              onClick={() => setSelectedCalendarDay(null)} 
+                                              className="font-bold text-indigo-600 hover:underline cursor-pointer"
+                                            >
+                                              ย่อ
+                                            </button>
+                                          </div>
+                                          {(() => {
+                                            const acts = getDayActivities(currentYear, currentMonthIndex, selectedCalendarDay);
+                                            if (acts.totalCount === 0) {
+                                              return <p className="text-[9px] text-gray-400 font-medium italic">ไม่มีกิจกรรมหรือความคืบหน้าในวันนี้</p>;
+                                            }
+                                            return (
+                                              <div className="space-y-1 max-h-[100px] overflow-y-auto pr-1 text-left">
+                                                {acts.projects.map(p => (
+                                                  <div key={p.id} className="flex items-center gap-1">
+                                                    <span className="w-1 h-1 rounded-full bg-blue-500 shrink-0" />
+                                                    <span className="text-gray-400 font-bold">[โครงการ]</span>
+                                                    <span className="text-gray-700 font-medium truncate">{p.name}</span>
+                                                  </div>
+                                                ))}
+                                                {acts.tasks.map(t => (
+                                                  <div key={t.id} className="flex items-center gap-1">
+                                                    <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
+                                                    <span className="text-gray-400 font-bold">[ภารกิจ]</span>
+                                                    <span className="text-gray-700 font-medium truncate">{t.title}</span>
+                                                  </div>
+                                                ))}
+                                                {acts.milestones.map(m => (
+                                                  <div key={m.id} className="flex items-center gap-1">
+                                                    <span className="w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+                                                    <span className="text-gray-400 font-bold">[หมุด]</span>
+                                                    <span className="text-gray-700 font-medium truncate">{m.title}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            );
+                                          })()}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Popover bottom bar with extremely handy quick action shortcuts */}
+                                  <div className="border-t border-gray-100 p-2 bg-gray-50 flex flex-wrap items-center justify-between gap-1.5">
+                                    <div className="flex gap-1">
+                                      {/* Quick shortcut to go to actual Today */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const today = new Date();
+                                          setCurrentMonthIndex(today.getMonth());
+                                          setCurrentYear(today.getFullYear());
+                                          setSelectedCalendarDay(today.getDate());
+                                          addNotification(`ย้ายหน้าต่างเลือกไปยัง เดือนนี้ (${THAI_MONTHS[today.getMonth()]} ${today.getFullYear()})`);
+                                        }}
+                                        className="px-2 py-1 bg-white hover:bg-gray-100 text-gray-700 border border-gray-200 text-[9px] font-bold rounded-lg cursor-pointer transition-colors shadow-3xs"
+                                      >
+                                        ย้ายไป "เดือนนี้"
+                                      </button>
+                                      
+                                      {/* Quick shortcut to auto-fit to jobs */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const earliestDate = projects.reduce((earliest: Date | null, p) => {
+                                            const startStr = p.startDate || getFallbackDateFromWeek(p.startWeek, 'start');
+                                            const d = new Date(startStr);
+                                            if (isNaN(d.getTime())) return earliest;
+                                            return earliest === null || d < earliest ? d : earliest;
+                                          }, null);
+
+                                          if (earliestDate) {
+                                            const y = (earliestDate as Date).getFullYear();
+                                            const m = (earliestDate as Date).getMonth();
+                                            setCurrentYear(y);
+                                            setCurrentMonthIndex(m);
+                                            setSelectedCalendarDay(null);
+                                            addNotification(`จัดช่วงเวลาอัตโนมัติไปยังจุดที่มีงาน (${THAI_MONTHS[m]} ค.ศ. ${y})`);
+                                          } else {
+                                            addNotification(`ไม่พบงานเพื่อจัดช่วงเวลาอัตโนมัติ`);
+                                          }
+                                        }}
+                                        className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 text-[9px] font-bold rounded-lg cursor-pointer transition-colors"
+                                      >
+                                        จัดเวลากลุ่มงาน
+                                      </button>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsTimelineCalendarOpen(false)}
+                                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[9px] font-bold rounded-lg cursor-pointer transition-colors ml-auto"
+                                    >
+                                      ปิด
+                                    </button>
+                                  </div>
+                                </motion.div>
+                              </>
+                            )}
+                          </AnimatePresence>
+                        </div>
+
+                        {/* Traditional Chevrons for Quick Switching */}
+                        <div className="flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg p-0.5 shadow-2xs">
                           <button 
                             onClick={() => {
                               if (timeView === 'yearly') {
@@ -1319,6 +1710,7 @@ export default function App() {
                               }
                             }}
                             className="p-1 hover:bg-gray-100 rounded text-gray-600 transition-colors cursor-pointer"
+                            title="ย้อนกลับ"
                           >
                             <ChevronLeft className="w-4 h-4" />
                           </button>
@@ -1338,10 +1730,56 @@ export default function App() {
                               }
                             }}
                             className="p-1 hover:bg-gray-100 rounded text-gray-600 transition-colors cursor-pointer"
+                            title="ถัดไป"
                           >
                             <ChevronRight className="w-4 h-4" />
                           </button>
                         </div>
+
+                        {/* Auto-fit Button */}
+                        <button
+                          onClick={() => {
+                            let earliestDate: Date | null = null;
+                            
+                            projects.forEach(p => {
+                              const dStr = p.startDate || getFallbackDateFromWeek(p.startWeek, 'start');
+                              const d = new Date(dStr);
+                              if (!isNaN(d.getTime())) {
+                                if (!earliestDate || d < earliestDate) earliestDate = d;
+                              }
+                            });
+
+                            tasks.forEach(t => {
+                              if (t.startDate) {
+                                const d = new Date(t.startDate);
+                                if (!isNaN(d.getTime())) {
+                                  if (!earliestDate || d < earliestDate) earliestDate = d;
+                                }
+                              }
+                              if (t.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)) {
+                                const d = new Date(t.dueDate);
+                                if (!isNaN(d.getTime())) {
+                                  if (!earliestDate || d < earliestDate) earliestDate = d;
+                                }
+                              }
+                            });
+
+                            if (earliestDate) {
+                              const y = (earliestDate as Date).getFullYear();
+                              const m = (earliestDate as Date).getMonth();
+                              setCurrentYear(y);
+                              setCurrentMonthIndex(m);
+                              addNotification(`ปรับช่วงเวลาอัตโนมัติไปยังจุดเริ่มต้นที่มีงาน (${THAI_MONTHS[m]} ค.ศ. ${y})`);
+                            } else {
+                              addNotification(`ไม่พบข้อมูลวันที่เพื่อจัดช่วงเวลาอัตโนมัติ`);
+                            }
+                          }}
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-[#4f46e5] text-xs font-bold rounded-xl cursor-pointer border border-indigo-100 transition-colors"
+                          title="ปรับไทม์ไลน์ไปยังช่วงเริ่มต้นงานแรกสุดโดยอัตโนมัติ"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>ปรับตามงานอัตโนมัติ</span>
+                        </button>
                       </div>
 
                       {/* Team Quick filter tabs */}
@@ -2141,7 +2579,7 @@ export default function App() {
                         }}
                         className="w-full mt-4 text-[#000000] bg-gray-50 hover:bg-gray-100 text-xs font-semibold py-2 rounded-xl transition-colors cursor-pointer border border-gray-200"
                       >
-                        ดูประวัติและไมล์สโตนทั้งหมด
+                        ดูประวัติไมล์สโตนทั้งหมด
                       </button>
                     </div>
 
@@ -2789,48 +3227,198 @@ export default function App() {
             )}
 
             {/* NOTIFICATIONS HISTORY TAB */}
-            {selectedTab === 'notifications' && (
-              <motion.div 
-                key="notifications"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs space-y-6"
-              >
-                <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-black">ประวัติบันทึกระบบและแจ้งเตือน</h3>
-                    <p className="text-xs text-gray-500">กิจกรรมที่บันทึกโดยเจ้าหน้าที่และระบบบริหารไทม์ไลน์กลาง</p>
-                  </div>
-                  
-                  <button 
-                    onClick={() => {
-                      setNotifications([]);
-                      addNotification('ล้างประวัติบันทึกระบบทั้งหมดแล้ว');
-                    }}
-                    className="text-xs text-red-500 font-bold hover:underline cursor-pointer"
-                  >
-                    ล้างบันทึกทั้งหมด
-                  </button>
-                </div>
+            {selectedTab === 'notifications' && (() => {
+              // Categorization helper inside the render context
+              const getNotificationCategory = (n: string) => {
+                const lower = n.toLowerCase();
 
-                <div className="space-y-3">
-                  {notifications.map((n, idx) => (
-                    <div key={idx} className="p-3.5 bg-gray-50 rounded-xl border border-gray-100 flex items-start gap-3">
-                      <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg mt-0.5 shrink-0">
-                        <Clock className="w-4 h-4" />
-                      </div>
+                // 1. Exact project name matches
+                for (const p of projects) {
+                  if (lower.includes(p.name.toLowerCase())) {
+                    return p.status; // 'on-track' | 'at-risk' | 'delayed'
+                  }
+                }
+
+                // 2. Keyword check for 'ล่าช้า' or 'วิกฤต' or 'ลบ' or 'delay'
+                if (lower.includes('ล่าช้า') || lower.includes('วิกฤต') || lower.includes('delay') || lower.includes('delayed')) {
+                  return 'delayed';
+                }
+
+                // 3. Keyword check for 'เสี่ยง' or 'at-risk' or ' risk' or 'คำเตือน' or 'ตรวจพบ'
+                if (lower.includes('เสี่ยง') || lower.includes('at-risk') || lower.includes('risk') || lower.includes('เตือน') || lower.includes('ตรวจพบ')) {
+                  return 'at-risk';
+                }
+
+                // 4. Keyword check for 'ตามแผน' or 'สำเร็จ' or 'เสร็จสิ้น' or 'เรียบร้อย' or 'สร้างงานใหม่' or 'เพิ่มโปรเจกต์' or 'on-track'
+                if (
+                  lower.includes('ตามแผน') || 
+                  lower.includes('สำเร็จ') || 
+                  lower.includes('เสร็จสิ้น') || 
+                  lower.includes('เรียบร้อย') || 
+                  lower.includes('สร้างงาน') || 
+                  lower.includes('เพิ่ม') || 
+                  lower.includes('on-track') ||
+                  lower.includes('เข้าสู่ระบบ')
+                ) {
+                  return 'on-track';
+                }
+
+                return 'general';
+              };
+
+              // Categorize the notifications
+              const categorized = {
+                'on-track': [] as { text: string; originalIndex: number }[],
+                'at-risk': [] as { text: string; originalIndex: number }[],
+                'delayed': [] as { text: string; originalIndex: number }[],
+                'general': [] as { text: string; originalIndex: number }[],
+              };
+
+              notifications.forEach((n, idx) => {
+                const cat = getNotificationCategory(n);
+                if (cat in categorized) {
+                  categorized[cat as keyof typeof categorized].push({ text: n, originalIndex: idx });
+                } else {
+                  categorized['general'].push({ text: n, originalIndex: idx });
+                }
+              });
+
+              const filteredNotifications = notificationFilter === 'all'
+                ? notifications.map((n, idx) => ({ text: n, category: getNotificationCategory(n), originalIndex: idx }))
+                : (categorized[notificationFilter] || []).map(item => ({ text: item.text, category: notificationFilter, originalIndex: item.originalIndex }));
+
+              // Categorization stats & configurations
+              const categoriesMeta = [
+                { id: 'all', title: 'ทั้งหมด', count: notifications.length, colorClass: 'bg-indigo-50 text-indigo-700 border-indigo-100 ring-indigo-500/20' },
+                { id: 'on-track', title: 'ตามแผน (On Track)', count: categorized['on-track'].length, colorClass: 'bg-emerald-50 text-emerald-700 border-emerald-100 ring-emerald-500/20', dot: 'bg-emerald-500', desc: 'การดำเนินงานราบรื่นและเป็นไปตามแผนงาน' },
+                { id: 'at-risk', title: 'มีความเสี่ยง (At Risk)', count: categorized['at-risk'].length, colorClass: 'bg-amber-50 text-amber-700 border-amber-100 ring-amber-500/20', dot: 'bg-amber-500', desc: 'อาจส่งงานล่าช้ากว่ากำหนด 3-5 วัน' },
+                { id: 'delayed', title: 'ล่าช้า (Delayed)', count: categorized['delayed'].length, colorClass: 'bg-red-50 text-red-700 border-red-100 ring-red-500/20', dot: 'bg-red-500', desc: 'ต้องการกำลังคนแก้ไขด่วนในสัปดาห์นี้' },
+                { id: 'general', title: 'ข้อมูลทั่วไป', count: categorized['general'].length, colorClass: 'bg-slate-50 text-slate-700 border-slate-200 ring-slate-500/20', dot: 'bg-slate-400', desc: 'ข้อมูลทั่วไปและการทำงานของระบบบริหารไทม์ไลน์กลาง' }
+              ];
+
+              const activeMeta = categoriesMeta.find(c => c.id === notificationFilter);
+
+              return (
+                <motion.div 
+                  key="notifications"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs space-y-6"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-4 gap-4">
+                    <div>
+                      <h3 className="text-lg font-bold text-black">ประวัติบันทึกระบบและแจ้งเตือน</h3>
+                      <p className="text-xs text-gray-500">กิจกรรมที่บันทึกโดยเจ้าหน้าที่และระบบบริหารไทม์ไลน์กลาง จัดหมวดหมู่ตามสถานะการดำเนินงานของงานและโครงการ</p>
+                    </div>
+                    
+                    <button 
+                      onClick={() => {
+                        setNotifications([]);
+                        addNotification('ล้างประวัติบันทึกระบบทั้งหมดแล้ว');
+                      }}
+                      className="text-xs text-red-500 font-bold hover:underline cursor-pointer self-start sm:self-auto shrink-0"
+                    >
+                      ล้างบันทึกทั้งหมด
+                    </button>
+                  </div>
+
+                  {/* Categories Tabs Filter */}
+                  <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-4">
+                    {categoriesMeta.map((cat) => {
+                      const isActive = notificationFilter === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => setNotificationFilter(cat.id as any)}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all duration-200 cursor-pointer flex items-center gap-2 ${
+                            isActive
+                              ? `${cat.colorClass} border-transparent ring-2`
+                              : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50 hover:text-gray-800'
+                          }`}
+                        >
+                          {cat.dot && <span className={`w-2 h-2 rounded-full ${cat.dot}`} />}
+                          <span>{cat.title}</span>
+                          <span className={`px-1.5 py-0.5 text-[10px] font-extrabold rounded-md ${isActive ? 'bg-white/80' : 'bg-gray-100 text-gray-600'}`}>
+                            {cat.count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Selected Category Status Description Banner */}
+                  {activeMeta && activeMeta.desc && (
+                    <div className={`p-3 rounded-xl border flex items-center gap-2.5 text-xs font-medium ${activeMeta.colorClass}`}>
+                      <Info className="w-4 h-4 shrink-0" />
                       <div>
-                        <p className="text-sm font-semibold text-gray-800 leading-normal">{n}</p>
-                        <span className="text-[9px] text-gray-400 font-bold block mt-1 uppercase tracking-wider">
-                          ระบบ TaskTracker Core Service • ตรวจสอบแล้ว
-                        </span>
+                        <span className="font-bold">{activeMeta.title}: </span>
+                        <span>{activeMeta.desc}</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
+                  )}
+
+                  {/* Notifications List */}
+                  <div className="space-y-3">
+                    {filteredNotifications.length === 0 ? (
+                      <div className="py-12 text-center flex flex-col items-center justify-center text-gray-400 space-y-2">
+                        <Bell className="w-10 h-10 stroke-[1.5]" />
+                        <p className="text-sm font-semibold">ไม่มีการแจ้งเตือนงานในหมวดหมู่นี้</p>
+                        <p className="text-xs">ประวัติและข้อมูลมีความปลอดภัยอย่างสมบูรณ์</p>
+                      </div>
+                    ) : (
+                      filteredNotifications.map((n, idx) => {
+                        let icon = <Clock className="w-4 h-4" />;
+                        let iconBg = 'bg-slate-50 text-slate-500 border border-slate-100';
+                        let badgeText = 'ข้อมูลทั่วไป';
+                        let badgeColor = 'bg-slate-100 text-slate-700 border-slate-200';
+
+                        if (n.category === 'on-track') {
+                          icon = <CheckCircle className="w-4 h-4" />;
+                          iconBg = 'bg-emerald-50 text-emerald-600 border border-emerald-100';
+                          badgeText = 'ตามแผน (On Track)';
+                          badgeColor = 'bg-emerald-50/80 text-emerald-700 border-emerald-100';
+                        } else if (n.category === 'at-risk') {
+                          icon = <AlertTriangle className="w-4 h-4" />;
+                          iconBg = 'bg-amber-50 text-amber-600 border border-amber-100';
+                          badgeText = 'มีความเสี่ยง (At Risk)';
+                          badgeColor = 'bg-amber-50/80 text-amber-700 border-amber-100';
+                        } else if (n.category === 'delayed') {
+                          icon = <AlertTriangle className="w-4 h-4" />;
+                          iconBg = 'bg-red-50 text-red-600 border border-red-100';
+                          badgeText = 'ล่าช้า (Delayed)';
+                          badgeColor = 'bg-red-50/80 text-red-700 border-red-100';
+                        }
+
+                        return (
+                          <motion.div 
+                            key={`${n.originalIndex}-${idx}`} 
+                            layoutId={`noti-${n.originalIndex}`}
+                            className="p-4 bg-gray-50/60 hover:bg-gray-50 rounded-xl border border-gray-100 flex items-start gap-4 transition-colors"
+                          >
+                            <div className={`p-2 rounded-xl shrink-0 ${iconBg}`}>
+                              {icon}
+                            </div>
+                            <div className="flex-1 space-y-1.5 text-left">
+                              <p className="text-sm font-semibold text-gray-800 leading-normal">{n.text}</p>
+                              
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${badgeColor}`}>
+                                  {badgeText}
+                                </span>
+                                <span className="text-[9px] text-gray-400 font-bold uppercase tracking-wider">
+                                  ระบบ TaskTracker Core Service • ตรวจสอบแล้ว
+                                </span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })()}
 
             {/* SETTINGS TAB */}
             {selectedTab === 'settings' && (
